@@ -1427,6 +1427,8 @@ static int phar_build(zend_object_iterator *iter, void *puser TSRMLS_DC) /* {{{ 
 	zend_class_entry *ce = p_obj->c;
 	phar_archive_object *phar_obj = p_obj->p;
 	char *str = "[stream]";
+	php_stream_statbuf ssb;
+	char ch;
 
 	iter->funcs->get_current_data(iter, &value TSRMLS_CC);
 
@@ -1550,7 +1552,7 @@ phar_spl_fileinfo:
 		base = temp;
 		base_len = strlen(base);
 
-		if (strstr(fname, base)) {
+		if (fname_len >= base_len && strncmp(fname, base, base_len) == 0 && ((ch = fname[base_len - IS_SLASH(base[base_len - 1])]) == '\0' || IS_SLASH(ch))) {
 			str_key_len = fname_len - base_len;
 
 			if (str_key_len <= 0) {
@@ -1709,6 +1711,16 @@ after_open_fp:
 		php_stream_copy_to_stream_ex(fp, p_obj->fp, PHP_STREAM_COPY_ALL, &contents_len);
 		data->internal_file->uncompressed_filesize = data->internal_file->compressed_filesize =
 			php_stream_tell(p_obj->fp) - data->internal_file->offset;
+		if (php_stream_stat(fp, &ssb) != -1) {
+			data->internal_file->flags = ssb.sb.st_mode & PHAR_ENT_PERM_MASK ;
+		} else {
+#ifndef _WIN32
+			mode_t mask;
+			mask = umask(0);
+			umask(mask);
+			data->internal_file->flags &= ~mask;
+#endif
+		}
 	}
 
 	if (close_fp) {
@@ -2026,7 +2038,7 @@ static zval *phar_rename_archive(phar_archive_data **sphar, char *ext, zend_bool
 	char *newname = NULL, *newpath = NULL;
 	zval *ret, arg1;
 	zend_class_entry *ce;
-	char *error;
+	char *error = NULL;
 	const char *pcr_error;
 	int ext_len = ext ? strlen(ext) : 0;
 	int oldname_len;
@@ -2186,6 +2198,8 @@ its_ok:
 	phar_flush(phar, 0, 0, 1, &error TSRMLS_CC);
 
 	if (error) {
+		zend_hash_del(&(PHAR_G(phar_fname_map)), newpath, phar->fname_len);
+		*sphar = NULL;
 		zend_throw_exception_ex(spl_ce_BadMethodCallException, 0 TSRMLS_CC, "%s", error);
 		efree(error);
 		efree(oldpath);

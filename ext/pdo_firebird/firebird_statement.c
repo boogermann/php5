@@ -120,8 +120,14 @@ static int firebird_stmt_execute(pdo_stmt_t *stmt TSRMLS_DC) /* {{{ */
 				}
 				if (result[0] == isc_info_sql_records) {
 					unsigned i = 3, result_size = isc_vax_integer(&result[1], 2);
+					if (result_size > sizeof(result)) {
+						goto error;
+					}
 					while (result[i] != isc_info_end && i < result_size) {
 						short len = (short) isc_vax_integer(&result[i + 1], 2);
+						if (len != 1 && len != 2 && len != 4) {
+							goto error;
+						}
 						if (result[i] != isc_info_req_select_count) {
 							affected_rows += isc_vax_integer(&result[i + 3], len);
 						}
@@ -145,7 +151,8 @@ static int firebird_stmt_execute(pdo_stmt_t *stmt TSRMLS_DC) /* {{{ */
 		return 1;
 	} while (0);
 
-	RECORD_ERROR(stmt);	
+error:
+	RECORD_ERROR(stmt);
 
 	return 0;
 }
@@ -223,7 +230,7 @@ static int firebird_fetch_blob(pdo_stmt_t *stmt, int colno, char **ptr, /* {{{ *
 {
 	pdo_firebird_stmt *S = (pdo_firebird_stmt*)stmt->driver_data;
 	pdo_firebird_db_handle *H = S->H;
-	isc_blob_handle blobh = NULL;
+	isc_blob_handle blobh = PDO_FIREBIRD_HANDLE_INITIALIZER;
 	char const bl_item = isc_info_blob_total_length;
 	char bl_info[20];
 	unsigned short i;
@@ -267,8 +274,13 @@ static int firebird_fetch_blob(pdo_stmt_t *stmt, int colno, char **ptr, /* {{{ *
 		unsigned short seg_len;
 		ISC_STATUS stat;
 
-		*ptr = S->fetch_buf[colno] = erealloc(*ptr, *len+1);
-	
+		/* prevent overflow */
+		if (*len == (LONG_MAX * 2UL +1UL)) {
+			result = 0;
+			goto fetch_blob_end;
+		}
+		*ptr = S->fetch_buf[colno] = erealloc(S->fetch_buf[colno], *len+1);
+
 		for (cur_len = stat = 0; (!stat || stat == isc_segment) && cur_len < *len; cur_len += seg_len) {
 	
 			unsigned short chunk_size = (*len-cur_len) > USHRT_MAX ? USHRT_MAX
@@ -412,7 +424,7 @@ static int firebird_bind_blob(pdo_stmt_t *stmt, ISC_QUAD *blob_id, zval *param T
 {
 	pdo_firebird_stmt *S = (pdo_firebird_stmt*)stmt->driver_data;
 	pdo_firebird_db_handle *H = S->H;
-	isc_blob_handle h = NULL;
+	isc_blob_handle h = PDO_FIREBIRD_HANDLE_INITIALIZER;
 	unsigned long put_cnt = 0, rem_cnt;
 	unsigned short chunk_size;
 	int result = 1;
